@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "cortex": {
+      "type": "stdio",
+      "command": "${PWD}/bin/cortex",
+      "args": [],
+      "env": {
+        "DATABASE_URL": "postgres://localhost:5432/cortex?sslmode=disable",
+        "TENANT_ID": "local",
+        "LM_BACKEND": "openai",
+        "OPENAI_API_KEY": "${OPENAI_API_KEY}"
+      }
+    }
+  }
+}

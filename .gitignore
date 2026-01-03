@@ -1,0 +1,30 @@
+# Binaries
+bin/
+*.exe
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+.envrc
+
+# Build
+dist/
+
+# Go
+vendor/
+
+# Claude Code local settings
+.claude/settings.local.json
+
+# Serena MCP memories (project-specific)
+.serena/memories/
