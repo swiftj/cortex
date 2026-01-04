@@ -15,12 +15,19 @@ import (
 
 // DB wraps a pgxpool connection pool with Cortex-specific operations.
 type DB struct {
-	pool     *pgxpool.Pool
-	tenantID string
+	pool        *pgxpool.Pool
+	tenantID    string
+	workspaceID string
 }
 
 // New creates a new DB instance with the given connection URL and tenant ID.
+// Uses "default" workspace for backward compatibility.
 func New(ctx context.Context, databaseURL, tenantID string) (*DB, error) {
+	return NewWithWorkspace(ctx, databaseURL, tenantID, "default")
+}
+
+// NewWithWorkspace creates a new DB instance with the given connection URL, tenant ID, and workspace ID.
+func NewWithWorkspace(ctx context.Context, databaseURL, tenantID, workspaceID string) (*DB, error) {
 	config, err := pgxpool.ParseConfig(databaseURL)
 	if err != nil {
 		return nil, fmt.Errorf("parse database URL: %w", err)
@@ -38,8 +45,9 @@ func New(ctx context.Context, databaseURL, tenantID string) (*DB, error) {
 	}
 
 	db := &DB{
-		pool:     pool,
-		tenantID: tenantID,
+		pool:        pool,
+		tenantID:    tenantID,
+		workspaceID: workspaceID,
 	}
 
 	return db, nil
@@ -58,6 +66,11 @@ func (db *DB) Pool() *pgxpool.Pool {
 // TenantID returns the configured tenant ID.
 func (db *DB) TenantID() string {
 	return db.tenantID
+}
+
+// WorkspaceID returns the configured workspace ID.
+func (db *DB) WorkspaceID() string {
+	return db.workspaceID
 }
 
 // Migrate runs all embedded SQL migrations in order.

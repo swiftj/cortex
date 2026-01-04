@@ -9,8 +9,9 @@ import (
 // This is the canonical schema for data interchange.
 type MemoryRecord struct {
 	// Core fields
-	ID        int64     `json:"id"`
-	TenantID  string    `json:"tenant_id"`
+	ID          int64     `json:"id"`
+	TenantID    string    `json:"tenant_id"`
+	WorkspaceID string    `json:"workspace_id"`
 	Kind      string    `json:"kind"`
 	Text      string    `json:"text"`
 	Source    *string   `json:"source,omitempty"`
@@ -42,6 +43,9 @@ type ExportOptions struct {
 	// TenantID filters export to specific tenant (empty = all)
 	TenantID string
 
+	// WorkspaceID filters export to specific workspace (empty = all)
+	WorkspaceID string
+
 	// Kind filters export to specific memory kind (empty = all)
 	Kind string
 
@@ -62,6 +66,9 @@ type ImportOptions struct {
 
 	// OverrideTenantID forces all imported records to use this tenant ID
 	OverrideTenantID string
+
+	// OverrideWorkspaceID forces all imported records to use this workspace ID
+	OverrideWorkspaceID string
 
 	// DryRun validates import without writing to database
 	DryRun bool

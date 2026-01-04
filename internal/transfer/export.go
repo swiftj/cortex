@@ -69,7 +69,7 @@ func (e *Exporter) Export(ctx context.Context, w io.Writer, opts ExportOptions) 
 
 func (e *Exporter) buildExportQuery(opts ExportOptions) (string, []any) {
 	query := `
-		SELECT id, tenant_id, kind, text, source, created_at, updated_at,
+		SELECT id, tenant_id, workspace_id, kind, text, source, created_at, updated_at,
 		       tags, importance, ttl_days, meta
 		FROM memories
 		WHERE 1=1
@@ -80,6 +80,12 @@ func (e *Exporter) buildExportQuery(opts ExportOptions) (string, []any) {
 	if opts.TenantID != "" {
 		query += fmt.Sprintf(" AND tenant_id = $%d", argIdx)
 		args = append(args, opts.TenantID)
+		argIdx++
+	}
+
+	if opts.WorkspaceID != "" {
+		query += fmt.Sprintf(" AND workspace_id = $%d", argIdx)
+		args = append(args, opts.WorkspaceID)
 		argIdx++
 	}
 
@@ -112,6 +118,7 @@ func (e *Exporter) scanMemoryRecord(rows interface{ Scan(dest ...any) error }, _
 	err := rows.Scan(
 		&record.ID,
 		&record.TenantID,
+		&record.WorkspaceID,
 		&record.Kind,
 		&record.Text,
 		&record.Source,

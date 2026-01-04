@@ -13,23 +13,28 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/johnswift/cortex/internal/db"
 	"github.com/johnswift/cortex/internal/llm"
 	"github.com/johnswift/cortex/internal/mcp"
 	"github.com/johnswift/cortex/internal/search"
+	"github.com/johnswift/cortex/internal/sweeper"
 	"github.com/johnswift/cortex/internal/transfer"
 )
 
 // Config holds all configuration for the Cortex server.
 type Config struct {
-	DatabaseURL string
-	TenantID    string
-	LMBackend   string
-	LMModel     string
-	EmbedModel  string
-	OpenAIKey   string
-	GeminiKey   string
+	DatabaseURL     string
+	TenantID        string
+	WorkspaceID     string
+	LMBackend       string
+	LMModel         string
+	EmbedModel      string
+	OpenAIKey       string
+	GeminiKey       string
+	SweeperEnabled  bool
+	SweeperInterval time.Duration
 }
 
 // CLI flags for export/import operations
@@ -74,10 +79,10 @@ func run() error {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	log.Printf("cortex: starting MCP memory server (tenant=%s, backend=%s)", cfg.TenantID, cfg.LMBackend)
+	log.Printf("cortex: starting MCP memory server (tenant=%s, workspace=%s, backend=%s)", cfg.TenantID, cfg.WorkspaceID, cfg.LMBackend)
 
 	// Initialize database connection
-	database, err := db.New(ctx, cfg.DatabaseURL, cfg.TenantID)
+	database, err := db.NewWithWorkspace(ctx, cfg.DatabaseURL, cfg.TenantID, cfg.WorkspaceID)
 	if err != nil {
 		return fmt.Errorf("connect to database: %w", err)
 	}
@@ -98,6 +103,14 @@ func run() error {
 	// Initialize hybrid searcher
 	searcher := search.NewHybridSearcher(database, provider)
 
+	// Start TTL sweeper if enabled
+	var sw *sweeper.Sweeper
+	if cfg.SweeperEnabled {
+		sw = sweeper.NewSweeper(database.Pool(), cfg.TenantID, cfg.WorkspaceID)
+		sw.Start(ctx, cfg.SweeperInterval)
+		log.Printf("cortex: TTL sweeper enabled (interval=%v)", cfg.SweeperInterval)
+	}
+
 	// Create MCP server
 	server := mcp.NewServer("cortex", "1.0.0")
 
@@ -110,19 +123,40 @@ func run() error {
 		return fmt.Errorf("run server: %w", err)
 	}
 
+	// Stop sweeper gracefully
+	if sw != nil {
+		sw.Stop()
+	}
+
 	log.Println("cortex: shutting down gracefully")
 	return nil
 }
 
 func loadConfig() (*Config, error) {
+	// Parse sweeper interval
+	sweeperIntervalStr := getEnv("SWEEPER_INTERVAL", "1h")
+	sweeperInterval, err := time.ParseDuration(sweeperIntervalStr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid SWEEPER_INTERVAL: %w", err)
+	}
+
+	// Parse sweeper enabled (default: true)
+	sweeperEnabled := true
+	if v := getEnv("SWEEPER_ENABLED", "true"); v == "false" || v == "0" {
+		sweeperEnabled = false
+	}
+
 	cfg := &Config{
-		DatabaseURL: getEnv("DATABASE_URL", ""),
-		TenantID:    getEnv("TENANT_ID", "local"),
-		LMBackend:   getEnv("LM_BACKEND", "openai"),
-		LMModel:     getEnv("LM_MODEL", "auto"),
-		EmbedModel:  getEnv("EMBED_MODEL", "auto"),
-		OpenAIKey:   getEnv("OPENAI_API_KEY", ""),
-		GeminiKey:   getEnv("GEMINI_API_KEY", ""),
+		DatabaseURL:     getEnv("DATABASE_URL", ""),
+		TenantID:        getEnv("TENANT_ID", "local"),
+		WorkspaceID:     getEnv("WORKSPACE_ID", "default"),
+		LMBackend:       getEnv("LM_BACKEND", "openai"),
+		LMModel:         getEnv("LM_MODEL", "auto"),
+		EmbedModel:      getEnv("EMBED_MODEL", "auto"),
+		OpenAIKey:       getEnv("OPENAI_API_KEY", ""),
+		GeminiKey:       getEnv("GEMINI_API_KEY", ""),
+		SweeperEnabled:  sweeperEnabled,
+		SweeperInterval: sweeperInterval,
 	}
 
 	// Validate required configuration
@@ -343,7 +377,7 @@ func runCLI() error {
 	ctx := context.Background()
 
 	// Connect to database
-	database, err := db.New(ctx, cfg.DatabaseURL, cfg.TenantID)
+	database, err := db.NewWithWorkspace(ctx, cfg.DatabaseURL, cfg.TenantID, cfg.WorkspaceID)
 	if err != nil {
 		return fmt.Errorf("connect to database: %w", err)
 	}
@@ -379,6 +413,7 @@ func loadConfigForCLI() (*Config, error) {
 	cfg := &Config{
 		DatabaseURL: getEnv("DATABASE_URL", ""),
 		TenantID:    getEnv("TENANT_ID", "local"),
+		WorkspaceID: getEnv("WORKSPACE_ID", "default"),
 		LMBackend:   getEnv("LM_BACKEND", "openai"),
 		LMModel:     getEnv("LM_MODEL", "auto"),
 		EmbedModel:  getEnv("EMBED_MODEL", "auto"),
@@ -415,6 +450,7 @@ func runExport(ctx context.Context, database *db.DB) error {
 	opts := transfer.ExportOptions{
 		IncludeEmbeddings: *withEmbeddings,
 		TenantID:          database.TenantID(),
+		WorkspaceID:       database.WorkspaceID(),
 	}
 
 	// Create output file
@@ -448,6 +484,7 @@ func runImport(ctx context.Context, database *db.DB, provider llm.Provider) erro
 		SkipExisting:         *skipExisting,
 		RegenerateEmbeddings: *regenerateEmbeddings,
 		OverrideTenantID:     database.TenantID(),
+		OverrideWorkspaceID:  database.WorkspaceID(),
 		DryRun:               *dryRun,
 	}
 
@@ -504,6 +541,7 @@ func createExportHandler(database *db.DB) mcp.Handler {
 		opts := transfer.ExportOptions{
 			IncludeEmbeddings: args.IncludeEmbeddings,
 			TenantID:          database.TenantID(),
+			WorkspaceID:       database.WorkspaceID(),
 			Kind:              args.Kind,
 			Limit:             args.Limit,
 		}
@@ -545,6 +583,7 @@ func createImportHandler(database *db.DB, provider llm.Provider) mcp.Handler {
 			SkipExisting:         args.SkipExisting,
 			RegenerateEmbeddings: args.RegenerateEmbeddings,
 			OverrideTenantID:     database.TenantID(),
+			OverrideWorkspaceID:  database.WorkspaceID(),
 			DryRun:               args.DryRun,
 		}
 

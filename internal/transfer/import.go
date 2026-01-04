@@ -56,6 +56,16 @@ func (i *Importer) Import(ctx context.Context, r io.Reader, opts ImportOptions) 
 			record.TenantID = opts.OverrideTenantID
 		}
 
+		// Override workspace ID if specified
+		if opts.OverrideWorkspaceID != "" {
+			record.WorkspaceID = opts.OverrideWorkspaceID
+		}
+
+		// Set default workspace if not specified
+		if record.WorkspaceID == "" {
+			record.WorkspaceID = "default"
+		}
+
 		if opts.DryRun {
 			result.Imported++
 			continue
@@ -63,7 +73,7 @@ func (i *Importer) Import(ctx context.Context, r io.Reader, opts ImportOptions) 
 
 		// Check if record exists
 		if opts.SkipExisting {
-			exists, err := i.memoryExists(ctx, record.ID, record.TenantID)
+			exists, err := i.memoryExists(ctx, record.ID, record.TenantID, record.WorkspaceID)
 			if err != nil {
 				result.Errors++
 				continue
@@ -90,11 +100,11 @@ func (i *Importer) Import(ctx context.Context, r io.Reader, opts ImportOptions) 
 	return result, nil
 }
 
-func (i *Importer) memoryExists(ctx context.Context, id int64, tenantID string) (bool, error) {
+func (i *Importer) memoryExists(ctx context.Context, id int64, tenantID, workspaceID string) (bool, error) {
 	var exists bool
 	err := i.pool.QueryRow(ctx, `
-		SELECT EXISTS(SELECT 1 FROM memories WHERE id = $1 AND tenant_id = $2)
-	`, id, tenantID).Scan(&exists)
+		SELECT EXISTS(SELECT 1 FROM memories WHERE id = $1 AND tenant_id = $2 AND workspace_id = $3)
+	`, id, tenantID, workspaceID).Scan(&exists)
 	return exists, err
 }
 
@@ -118,9 +128,10 @@ func (i *Importer) importRecord(ctx context.Context, record *MemoryRecord, opts 
 	// Upsert memory
 	var memoryID int64
 	err = tx.QueryRow(ctx, `
-		INSERT INTO memories (id, tenant_id, kind, text, source, created_at, updated_at, tags, importance, ttl_days, meta)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		INSERT INTO memories (id, tenant_id, workspace_id, kind, text, source, created_at, updated_at, tags, importance, ttl_days, meta)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		ON CONFLICT (id) DO UPDATE SET
+			workspace_id = EXCLUDED.workspace_id,
 			kind = EXCLUDED.kind,
 			text = EXCLUDED.text,
 			source = EXCLUDED.source,
@@ -130,7 +141,7 @@ func (i *Importer) importRecord(ctx context.Context, record *MemoryRecord, opts 
 			ttl_days = EXCLUDED.ttl_days,
 			meta = EXCLUDED.meta
 		RETURNING id
-	`, record.ID, record.TenantID, record.Kind, record.Text, record.Source,
+	`, record.ID, record.TenantID, record.WorkspaceID, record.Kind, record.Text, record.Source,
 		record.CreatedAt, record.UpdatedAt, record.Tags, record.Importance,
 		record.TTLDays, metaJSON).Scan(&memoryID)
 
