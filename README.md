@@ -146,6 +146,65 @@ Remove a memory by ID.
 }
 ```
 
+### `memory.export`
+
+Export memories to JSONL format.
+
+```json
+{
+  "include_embeddings": false,
+  "kind": "preference",
+  "limit": 100
+}
+```
+
+**Returns**: `{ "data": "...", "exported": 100, "errors": 0 }`
+
+### `memory.import`
+
+Import memories from JSONL format.
+
+```json
+{
+  "data": "{\"id\":1,\"text\":\"...\",\"kind\":\"note\"}\n{\"id\":2,...}",
+  "skip_existing": false,
+  "regenerate_embeddings": false,
+  "dry_run": false
+}
+```
+
+**Returns**: `{ "total": 2, "imported": 2, "skipped": 0, "errors": 0 }`
+
+## CLI Mode
+
+Cortex can also be used in CLI mode for batch operations:
+
+### Export
+
+```bash
+# Export all memories
+./bin/cortex --export memories.jsonl
+
+# Export with embeddings (larger file)
+./bin/cortex --export memories.jsonl --with-embeddings
+```
+
+### Import
+
+```bash
+# Import memories
+./bin/cortex --import memories.jsonl
+
+# Skip existing records
+./bin/cortex --import memories.jsonl --skip-existing
+
+# Regenerate embeddings (requires API key)
+./bin/cortex --import memories.jsonl --regenerate-embeddings
+
+# Dry run (validate without writing)
+./bin/cortex --import memories.jsonl --dry-run
+```
+
 ## Architecture
 
 ```
@@ -155,7 +214,8 @@ cortex/
 │   ├── db/              # PostgreSQL operations (pgx)
 │   ├── llm/             # LLM adapters (OpenAI, Gemini)
 │   ├── mcp/             # MCP JSON-RPC server
-│   └── search/          # Hybrid search & ranking
+│   ├── search/          # Hybrid search & ranking
+│   └── transfer/        # Export/import (JSONL)
 ├── migrations/          # Embedded SQL migrations
 └── configs/             # Example configurations
 ```
@@ -225,7 +285,7 @@ ls -lh bin/cortex
 
 - [ ] TTL sweeper for automatic memory expiry
 - [ ] Batch re-embedding when switching models
-- [ ] Export/import (JSONL format)
+- [x] Export/import (JSONL format)
 - [ ] Entity extraction and relationship tracking
 - [ ] Multi-model embeddings (store multiple vectors per memory)
 - [ ] Workspace namespacing for project-specific memories
