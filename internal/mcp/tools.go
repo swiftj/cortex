@@ -7,6 +7,8 @@ func MemoryTools() []Tool {
 		MemorySearchTool(),
 		MemoryUpdateTool(),
 		MemoryDeleteTool(),
+		MemoryExportTool(),
+		MemoryImportTool(),
 	}
 }
 
@@ -244,4 +246,101 @@ type MemoryDeleteArgs struct {
 // MemoryDeleteResult is the result of memory.delete.
 type MemoryDeleteResult struct {
 	OK bool `json:"ok"`
+}
+
+// MemoryExportTool returns the tool definition for memory.export.
+func MemoryExportTool() Tool {
+	falseVal := false
+	minLimit := 1.0
+
+	return Tool{
+		Name:        "memory.export",
+		Description: "Export memories to JSONL format. Returns a string containing the exported data that can be saved to a file.",
+		InputSchema: JSONSchema{
+			Type: "object",
+			Properties: map[string]JSONSchema{
+				"include_embeddings": {
+					Type:        "boolean",
+					Description: "Include vector embeddings in export (results in larger output).",
+					Default:     false,
+				},
+				"kind": {
+					Type:        "string",
+					Description: "Filter to export only memories of this type.",
+				},
+				"limit": {
+					Type:        "integer",
+					Description: "Maximum number of memories to export.",
+					Minimum:     &minLimit,
+				},
+			},
+			AdditionalProperties: &falseVal,
+		},
+	}
+}
+
+// MemoryImportTool returns the tool definition for memory.import.
+func MemoryImportTool() Tool {
+	falseVal := false
+
+	return Tool{
+		Name:        "memory.import",
+		Description: "Import memories from JSONL format. Each line should be a JSON object representing a memory.",
+		InputSchema: JSONSchema{
+			Type: "object",
+			Properties: map[string]JSONSchema{
+				"data": {
+					Type:        "string",
+					Description: "JSONL data to import (one JSON object per line).",
+				},
+				"skip_existing": {
+					Type:        "boolean",
+					Description: "Skip records that already exist instead of updating them.",
+					Default:     false,
+				},
+				"regenerate_embeddings": {
+					Type:        "boolean",
+					Description: "Generate new embeddings instead of using imported ones.",
+					Default:     false,
+				},
+				"dry_run": {
+					Type:        "boolean",
+					Description: "Validate import without writing to database.",
+					Default:     false,
+				},
+			},
+			Required:             []string{"data"},
+			AdditionalProperties: &falseVal,
+		},
+	}
+}
+
+// MemoryExportArgs contains the arguments for memory.export.
+type MemoryExportArgs struct {
+	IncludeEmbeddings bool   `json:"include_embeddings,omitempty"`
+	Kind              string `json:"kind,omitempty"`
+	Limit             int    `json:"limit,omitempty"`
+}
+
+// MemoryExportResult is the result of memory.export.
+type MemoryExportResult struct {
+	Data     string `json:"data"`
+	Exported int64  `json:"exported"`
+	Errors   int64  `json:"errors"`
+}
+
+// MemoryImportArgs contains the arguments for memory.import.
+type MemoryImportArgs struct {
+	Data                 string `json:"data"`
+	SkipExisting         bool   `json:"skip_existing,omitempty"`
+	RegenerateEmbeddings bool   `json:"regenerate_embeddings,omitempty"`
+	DryRun               bool   `json:"dry_run,omitempty"`
+}
+
+// MemoryImportResult is the result of memory.import.
+type MemoryImportResult struct {
+	Total    int64 `json:"total"`
+	Imported int64 `json:"imported"`
+	Skipped  int64 `json:"skipped"`
+	Errors   int64 `json:"errors"`
 }

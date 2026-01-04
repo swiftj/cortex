@@ -2,18 +2,23 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/johnswift/cortex/internal/db"
 	"github.com/johnswift/cortex/internal/llm"
 	"github.com/johnswift/cortex/internal/mcp"
 	"github.com/johnswift/cortex/internal/search"
+	"github.com/johnswift/cortex/internal/transfer"
 )
 
 // Config holds all configuration for the Cortex server.
@@ -27,11 +32,32 @@ type Config struct {
 	GeminiKey   string
 }
 
+// CLI flags for export/import operations
+var (
+	exportFile = flag.String("export", "", "Export memories to JSONL file")
+	importFile = flag.String("import", "", "Import memories from JSONL file")
+	withEmbeddings = flag.Bool("with-embeddings", false, "Include embeddings in export")
+	skipExisting = flag.Bool("skip-existing", false, "Skip existing records during import")
+	regenerateEmbeddings = flag.Bool("regenerate-embeddings", false, "Regenerate embeddings during import")
+	dryRun = flag.Bool("dry-run", false, "Validate import without writing to database")
+)
+
 func main() {
 	// Configure logging to stderr (stdout reserved for MCP JSON-RPC)
 	log.SetOutput(os.Stderr)
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 
+	flag.Parse()
+
+	// Check for CLI mode (export/import)
+	if *exportFile != "" || *importFile != "" {
+		if err := runCLI(); err != nil {
+			log.Fatalf("cortex: %v", err)
+		}
+		return
+	}
+
+	// Run MCP server mode
 	if err := run(); err != nil {
 		log.Fatalf("cortex: %v", err)
 	}
@@ -138,6 +164,8 @@ func registerMemoryTools(server *mcp.Server, database *db.DB, provider llm.Provi
 	server.RegisterTool(mcp.MemorySearchTool(), createSearchHandler(searcher))
 	server.RegisterTool(mcp.MemoryUpdateTool(), createUpdateHandler(database, provider))
 	server.RegisterTool(mcp.MemoryDeleteTool(), createDeleteHandler(database))
+	server.RegisterTool(mcp.MemoryExportTool(), createExportHandler(database))
+	server.RegisterTool(mcp.MemoryImportTool(), createImportHandler(database, provider))
 }
 
 func createAddHandler(database *db.DB, provider llm.Provider) mcp.Handler {
@@ -303,4 +331,234 @@ func getEnv(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// runCLI handles CLI mode for export/import operations
+func runCLI() error {
+	cfg, err := loadConfigForCLI()
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+
+	ctx := context.Background()
+
+	// Connect to database
+	database, err := db.New(ctx, cfg.DatabaseURL, cfg.TenantID)
+	if err != nil {
+		return fmt.Errorf("connect to database: %w", err)
+	}
+	defer database.Close()
+
+	// Run migrations
+	if err := database.Migrate(ctx); err != nil {
+		return fmt.Errorf("run migrations: %w", err)
+	}
+
+	// Handle export
+	if *exportFile != "" {
+		return runExport(ctx, database)
+	}
+
+	// Handle import
+	if *importFile != "" {
+		// Initialize LLM provider if regenerating embeddings
+		var provider llm.Provider
+		if *regenerateEmbeddings {
+			provider, err = initLLMProvider(cfg)
+			if err != nil {
+				return fmt.Errorf("init LLM provider: %w", err)
+			}
+		}
+		return runImport(ctx, database, provider)
+	}
+
+	return nil
+}
+
+func loadConfigForCLI() (*Config, error) {
+	cfg := &Config{
+		DatabaseURL: getEnv("DATABASE_URL", ""),
+		TenantID:    getEnv("TENANT_ID", "local"),
+		LMBackend:   getEnv("LM_BACKEND", "openai"),
+		LMModel:     getEnv("LM_MODEL", "auto"),
+		EmbedModel:  getEnv("EMBED_MODEL", "auto"),
+		OpenAIKey:   getEnv("OPENAI_API_KEY", ""),
+		GeminiKey:   getEnv("GEMINI_API_KEY", ""),
+	}
+
+	if cfg.DatabaseURL == "" {
+		return nil, fmt.Errorf("DATABASE_URL environment variable is required")
+	}
+
+	// Only require API key if regenerating embeddings
+	if *regenerateEmbeddings {
+		switch cfg.LMBackend {
+		case "openai":
+			if cfg.OpenAIKey == "" {
+				return nil, fmt.Errorf("OPENAI_API_KEY required when using --regenerate-embeddings")
+			}
+		case "gemini":
+			if cfg.GeminiKey == "" {
+				return nil, fmt.Errorf("GEMINI_API_KEY required when using --regenerate-embeddings")
+			}
+		}
+	}
+
+	return cfg, nil
+}
+
+func runExport(ctx context.Context, database *db.DB) error {
+	log.Printf("cortex: exporting memories to %s", *exportFile)
+
+	exporter := transfer.NewExporter(database.Pool())
+
+	opts := transfer.ExportOptions{
+		IncludeEmbeddings: *withEmbeddings,
+		TenantID:          database.TenantID(),
+	}
+
+	// Create output file
+	f, err := os.Create(*exportFile)
+	if err != nil {
+		return fmt.Errorf("create export file: %w", err)
+	}
+	defer f.Close()
+
+	result, err := exporter.Export(ctx, f, opts)
+	if err != nil {
+		return fmt.Errorf("export: %w", err)
+	}
+
+	log.Printf("cortex: exported %d memories (%d errors)", result.Exported, result.Errors)
+	return nil
+}
+
+func runImport(ctx context.Context, database *db.DB, provider llm.Provider) error {
+	log.Printf("cortex: importing memories from %s", *importFile)
+
+	// Create embedder wrapper if provider is available
+	var embedder transfer.EmbeddingProvider
+	if provider != nil {
+		embedder = &providerWrapper{provider}
+	}
+
+	importer := transfer.NewImporter(database.Pool(), embedder)
+
+	opts := transfer.ImportOptions{
+		SkipExisting:         *skipExisting,
+		RegenerateEmbeddings: *regenerateEmbeddings,
+		OverrideTenantID:     database.TenantID(),
+		DryRun:               *dryRun,
+	}
+
+	// Open input file
+	f, err := os.Open(*importFile)
+	if err != nil {
+		return fmt.Errorf("open import file: %w", err)
+	}
+	defer f.Close()
+
+	result, err := importer.Import(ctx, f, opts)
+	if err != nil {
+		return fmt.Errorf("import: %w", err)
+	}
+
+	if *dryRun {
+		log.Printf("cortex: (dry run) would import %d memories (%d skipped, %d errors)",
+			result.Imported, result.Skipped, result.Errors)
+	} else {
+		log.Printf("cortex: imported %d memories (%d skipped, %d errors)",
+			result.Imported, result.Skipped, result.Errors)
+	}
+	return nil
+}
+
+// providerWrapper wraps llm.Provider to implement transfer.EmbeddingProvider
+type providerWrapper struct {
+	provider llm.Provider
+}
+
+func (p *providerWrapper) Embed(ctx context.Context, text string) ([]float32, error) {
+	return p.provider.Embed(ctx, text)
+}
+
+func (p *providerWrapper) EmbedModel() string {
+	return p.provider.EmbedModel()
+}
+
+func (p *providerWrapper) Dimensions() int {
+	return p.provider.Dimensions()
+}
+
+// MCP tool handlers for export/import
+
+func createExportHandler(database *db.DB) mcp.Handler {
+	return func(ctx context.Context, params json.RawMessage) (any, error) {
+		var args mcp.MemoryExportArgs
+		if err := json.Unmarshal(params, &args); err != nil {
+			return nil, fmt.Errorf("invalid arguments: %w", err)
+		}
+
+		exporter := transfer.NewExporter(database.Pool())
+
+		opts := transfer.ExportOptions{
+			IncludeEmbeddings: args.IncludeEmbeddings,
+			TenantID:          database.TenantID(),
+			Kind:              args.Kind,
+			Limit:             args.Limit,
+		}
+
+		var buf bytes.Buffer
+		result, err := exporter.Export(ctx, &buf, opts)
+		if err != nil {
+			return nil, fmt.Errorf("export: %w", err)
+		}
+
+		return mcp.MemoryExportResult{
+			Data:     buf.String(),
+			Exported: result.Exported,
+			Errors:   result.Errors,
+		}, nil
+	}
+}
+
+func createImportHandler(database *db.DB, provider llm.Provider) mcp.Handler {
+	return func(ctx context.Context, params json.RawMessage) (any, error) {
+		var args mcp.MemoryImportArgs
+		if err := json.Unmarshal(params, &args); err != nil {
+			return nil, fmt.Errorf("invalid arguments: %w", err)
+		}
+
+		if args.Data == "" {
+			return nil, fmt.Errorf("data is required")
+		}
+
+		// Create embedder wrapper
+		var embedder transfer.EmbeddingProvider
+		if provider != nil {
+			embedder = &providerWrapper{provider}
+		}
+
+		importer := transfer.NewImporter(database.Pool(), embedder)
+
+		opts := transfer.ImportOptions{
+			SkipExisting:         args.SkipExisting,
+			RegenerateEmbeddings: args.RegenerateEmbeddings,
+			OverrideTenantID:     database.TenantID(),
+			DryRun:               args.DryRun,
+		}
+
+		reader := strings.NewReader(args.Data)
+		result, err := importer.Import(ctx, io.NopCloser(reader), opts)
+		if err != nil {
+			return nil, fmt.Errorf("import: %w", err)
+		}
+
+		return mcp.MemoryImportResult{
+			Total:    result.Total,
+			Imported: result.Imported,
+			Skipped:  result.Skipped,
+			Errors:   result.Errors,
+		}, nil
+	}
 }
