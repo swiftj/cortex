@@ -173,17 +173,15 @@ Having Cortex installed is only half the battle. The real power comes from Claud
 
 Create a `CLAUDE.md` file in your project root with explicit memory directives:
 
-```markdown
+````markdown
 # Project Memory Protocol
 
 ## Memory Requirements
 This project uses Cortex for persistent memory. You MUST:
 
 1. **At session start**: Search memories for project context
-   ```
-   memory.search({ query: "project architecture decisions" })
-   memory.search({ query: "coding standards preferences" })
-   ```
+   - `memory.search({ query: "project architecture decisions" })`
+   - `memory.search({ query: "coding standards preferences" })`
 
 2. **When learning something new**: Store it immediately
    - User preferences → `memory.add` with kind: "preference"
@@ -191,19 +189,11 @@ This project uses Cortex for persistent memory. You MUST:
    - Gotchas/pitfalls → `memory.add` with kind: "note", tags: ["gotcha"]
 
 3. **Before major changes**: Check for relevant context
-   ```
-   memory.search({ query: "<relevant topic>" })
-   ```
+   - `memory.search({ query: "<relevant topic>" })`
 
 4. **After completing features**: Document learnings
-   ```
-   memory.add({
-     text: "Completed X using Y approach because Z",
-     kind: "fact",
-     tags: ["implementation", "decision"]
-   })
-   ```
-```
+   - `memory.add({ text: "Completed X using Y approach", kind: "fact", tags: ["implementation"] })`
+````
 
 ### Strategy 2: Explicit Prompting Patterns
 
