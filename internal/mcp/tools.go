@@ -94,6 +94,10 @@ func MemorySearchTool() Tool {
 					Description: "If true, use hybrid search combining vector and lexical similarity. If false, use vector search only.",
 					Default:     true,
 				},
+				"model": {
+					Type:        "string",
+					Description: "Optional: filter search to a specific embedding model (e.g., 'text-embedding-3-small'). Leave empty to search all models.",
+				},
 			},
 			Required:             []string{"query"},
 			AdditionalProperties: &falseVal,
@@ -202,9 +206,10 @@ type MemoryAddResult struct {
 
 // MemorySearchArgs contains the arguments for memory.search.
 type MemorySearchArgs struct {
-	Query  string `json:"query"`
-	K      *int   `json:"k,omitempty"`
-	Hybrid *bool  `json:"hybrid,omitempty"`
+	Query  string  `json:"query"`
+	K      *int    `json:"k,omitempty"`
+	Hybrid *bool   `json:"hybrid,omitempty"`
+	Model  *string `json:"model,omitempty"` // Optional: filter by embedding model
 }
 
 // MemorySearchResult is a single search result.

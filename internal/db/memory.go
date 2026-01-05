@@ -72,13 +72,13 @@ func (db *DB) AddMemory(ctx context.Context, params AddMemoryParams) (int64, err
 }
 
 // AddEmbedding stores an embedding for a memory.
+// Multiple embeddings per memory are supported (one per model).
 func (db *DB) AddEmbedding(ctx context.Context, memoryID int64, model string, embedding []float32) error {
 	vec := pgvector.NewVector(embedding)
 	_, err := db.pool.Exec(ctx, `
 		INSERT INTO memory_embeddings (memory_id, model, dims, embedding)
 		VALUES ($1, $2, $3, $4)
-		ON CONFLICT (memory_id) DO UPDATE SET
-			model = EXCLUDED.model,
+		ON CONFLICT (memory_id, model) DO UPDATE SET
 			dims = EXCLUDED.dims,
 			embedding = EXCLUDED.embedding
 	`, memoryID, model, len(embedding), vec)
@@ -87,6 +87,55 @@ func (db *DB) AddEmbedding(ctx context.Context, memoryID int64, model string, em
 		return fmt.Errorf("insert embedding: %w", err)
 	}
 
+	return nil
+}
+
+// Embedding represents a stored embedding with its model info.
+type Embedding struct {
+	MemoryID  int64     `json:"memory_id"`
+	Model     string    `json:"model"`
+	Dims      int       `json:"dims"`
+	Embedding []float32 `json:"embedding"`
+}
+
+// GetEmbeddings retrieves all embeddings for a memory.
+func (db *DB) GetEmbeddings(ctx context.Context, memoryID int64) ([]Embedding, error) {
+	rows, err := db.pool.Query(ctx, `
+		SELECT memory_id, model, dims, embedding
+		FROM memory_embeddings
+		WHERE memory_id = $1
+	`, memoryID)
+	if err != nil {
+		return nil, fmt.Errorf("query embeddings: %w", err)
+	}
+	defer rows.Close()
+
+	var embeddings []Embedding
+	for rows.Next() {
+		var e Embedding
+		var vec pgvector.Vector
+		if err := rows.Scan(&e.MemoryID, &e.Model, &e.Dims, &vec); err != nil {
+			return nil, fmt.Errorf("scan embedding: %w", err)
+		}
+		e.Embedding = vec.Slice()
+		embeddings = append(embeddings, e)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate embeddings: %w", err)
+	}
+
+	return embeddings, nil
+}
+
+// DeleteEmbedding removes a specific embedding for a memory.
+func (db *DB) DeleteEmbedding(ctx context.Context, memoryID int64, model string) error {
+	_, err := db.pool.Exec(ctx, `
+		DELETE FROM memory_embeddings WHERE memory_id = $1 AND model = $2
+	`, memoryID, model)
+	if err != nil {
+		return fmt.Errorf("delete embedding: %w", err)
+	}
 	return nil
 }
 
@@ -215,9 +264,12 @@ func (db *DB) DeleteMemory(ctx context.Context, id int64) error {
 type VectorSearchParams struct {
 	Embedding []float32
 	Limit     int
+	Model     string // Optional: filter by embedding model (empty = any model)
 }
 
 // VectorSearch performs vector similarity search using cosine distance.
+// If Model is specified, only embeddings from that model are searched.
+// If Model is empty, the first matching embedding is used (for backward compatibility).
 func (db *DB) VectorSearch(ctx context.Context, params VectorSearchParams) ([]MemoryWithScore, error) {
 	if params.Limit <= 0 {
 		params.Limit = 10
@@ -225,17 +277,36 @@ func (db *DB) VectorSearch(ctx context.Context, params VectorSearchParams) ([]Me
 
 	vec := pgvector.NewVector(params.Embedding)
 
-	rows, err := db.pool.Query(ctx, `
-		SELECT
-			m.id, m.tenant_id, m.workspace_id, m.kind, m.text, m.source,
-			m.created_at, m.updated_at, m.tags, m.importance, m.ttl_days, m.meta,
-			1 - (e.embedding <=> $1) AS score
-		FROM memories m
-		JOIN memory_embeddings e ON m.id = e.memory_id
-		WHERE m.tenant_id = $2 AND m.workspace_id = $3
-		ORDER BY e.embedding <=> $1
-		LIMIT $4
-	`, vec, db.tenantID, db.workspaceID, params.Limit)
+	var rows pgx.Rows
+	var err error
+
+	if params.Model != "" {
+		// Search only embeddings from the specified model
+		rows, err = db.pool.Query(ctx, `
+			SELECT
+				m.id, m.tenant_id, m.workspace_id, m.kind, m.text, m.source,
+				m.created_at, m.updated_at, m.tags, m.importance, m.ttl_days, m.meta,
+				1 - (e.embedding <=> $1) AS score
+			FROM memories m
+			JOIN memory_embeddings e ON m.id = e.memory_id
+			WHERE m.tenant_id = $2 AND m.workspace_id = $3 AND e.model = $4
+			ORDER BY e.embedding <=> $1
+			LIMIT $5
+		`, vec, db.tenantID, db.workspaceID, params.Model, params.Limit)
+	} else {
+		// Search all embeddings (backward compatible - uses DISTINCT ON to avoid duplicates)
+		rows, err = db.pool.Query(ctx, `
+			SELECT DISTINCT ON (m.id)
+				m.id, m.tenant_id, m.workspace_id, m.kind, m.text, m.source,
+				m.created_at, m.updated_at, m.tags, m.importance, m.ttl_days, m.meta,
+				1 - (e.embedding <=> $1) AS score
+			FROM memories m
+			JOIN memory_embeddings e ON m.id = e.memory_id
+			WHERE m.tenant_id = $2 AND m.workspace_id = $3
+			ORDER BY m.id, e.embedding <=> $1
+			LIMIT $4
+		`, vec, db.tenantID, db.workspaceID, params.Limit)
+	}
 
 	if err != nil {
 		return nil, fmt.Errorf("vector search: %w", err)

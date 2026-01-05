@@ -48,6 +48,7 @@ type SearchParams struct {
 	Limit  int     // Maximum number of results to return
 	Hybrid bool    // false = vector only, true = hybrid fusion
 	Alpha  float32 // 0 = lexical only, 1 = vector only (overrides default if > 0)
+	Model  string  // Optional: filter by embedding model (empty = any model)
 }
 
 // SearchResult is a memory with fused score.
@@ -83,18 +84,19 @@ func (h *HybridSearcher) Search(ctx context.Context, params SearchParams) ([]Sea
 
 	// Vector-only search
 	if !params.Hybrid {
-		return h.vectorOnlySearch(ctx, embedding, params.Limit)
+		return h.vectorOnlySearch(ctx, embedding, params.Limit, params.Model)
 	}
 
 	// Hybrid search with score fusion
-	return h.hybridSearch(ctx, params.Query, embedding, params.Limit, alpha)
+	return h.hybridSearch(ctx, params.Query, embedding, params.Limit, alpha, params.Model)
 }
 
 // vectorOnlySearch performs pure vector similarity search.
-func (h *HybridSearcher) vectorOnlySearch(ctx context.Context, embedding []float32, limit int) ([]SearchResult, error) {
+func (h *HybridSearcher) vectorOnlySearch(ctx context.Context, embedding []float32, limit int, model string) ([]SearchResult, error) {
 	results, err := h.db.VectorSearch(ctx, db.VectorSearchParams{
 		Embedding: embedding,
 		Limit:     limit,
+		Model:     model,
 	})
 	if err != nil {
 		return nil, err
@@ -104,7 +106,7 @@ func (h *HybridSearcher) vectorOnlySearch(ctx context.Context, embedding []float
 }
 
 // hybridSearch performs combined vector and lexical search with score fusion.
-func (h *HybridSearcher) hybridSearch(ctx context.Context, query string, embedding []float32, limit int, alpha float32) ([]SearchResult, error) {
+func (h *HybridSearcher) hybridSearch(ctx context.Context, query string, embedding []float32, limit int, alpha float32, model string) ([]SearchResult, error) {
 	// Fetch more results than needed to improve fusion quality
 	fetchLimit := limit * 3
 	if fetchLimit < 20 {
@@ -115,6 +117,7 @@ func (h *HybridSearcher) hybridSearch(ctx context.Context, query string, embeddi
 	vectorResults, err := h.db.VectorSearch(ctx, db.VectorSearchParams{
 		Embedding: embedding,
 		Limit:     fetchLimit,
+		Model:     model,
 	})
 	if err != nil {
 		return nil, err

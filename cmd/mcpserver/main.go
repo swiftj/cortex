@@ -31,6 +31,7 @@ type Config struct {
 	LMBackend       string
 	LMModel         string
 	EmbedModel      string
+	EmbedModels     string // Comma-separated list for multi-model embeddings
 	OpenAIKey       string
 	GeminiKey       string
 	SweeperEnabled  bool
@@ -101,6 +102,23 @@ func run() error {
 		return fmt.Errorf("init LLM provider: %w", err)
 	}
 
+	// Initialize multi-model embedder if EMBED_MODELS is configured
+	var multiEmbedder *llm.MultiEmbedder
+	if cfg.EmbedModels != "" {
+		var apiKey string
+		switch cfg.LMBackend {
+		case "openai":
+			apiKey = cfg.OpenAIKey
+		case "gemini":
+			apiKey = cfg.GeminiKey
+		}
+		multiEmbedder, err = llm.NewMultiEmbedder(cfg.LMBackend, apiKey, cfg.EmbedModels)
+		if err != nil {
+			return fmt.Errorf("init multi-embedder: %w", err)
+		}
+		log.Printf("cortex: multi-model embeddings enabled (%v)", multiEmbedder.Models())
+	}
+
 	// Initialize hybrid searcher
 	searcher := search.NewHybridSearcher(database, provider)
 
@@ -126,7 +144,7 @@ func run() error {
 	server := mcp.NewServer("cortex", "1.0.0")
 
 	// Register memory tools
-	registerMemoryTools(server, database, provider, searcher)
+	registerMemoryTools(server, database, provider, multiEmbedder, searcher)
 
 	// Run the MCP server (blocks until context is cancelled)
 	log.Println("cortex: MCP server ready, listening on stdio")
@@ -164,6 +182,7 @@ func loadConfig() (*Config, error) {
 		LMBackend:       getEnv("LM_BACKEND", "openai"),
 		LMModel:         getEnv("LM_MODEL", "auto"),
 		EmbedModel:      getEnv("EMBED_MODEL", "auto"),
+		EmbedModels:     getEnv("EMBED_MODELS", ""), // Comma-separated for multi-model
 		OpenAIKey:       getEnv("OPENAI_API_KEY", ""),
 		GeminiKey:       getEnv("GEMINI_API_KEY", ""),
 		SweeperEnabled:  sweeperEnabled,
@@ -204,17 +223,17 @@ func initLLMProvider(cfg *Config) (llm.Provider, error) {
 	return llm.NewProvider(cfg.LMBackend, apiKey, cfg.LMModel, cfg.EmbedModel)
 }
 
-func registerMemoryTools(server *mcp.Server, database *db.DB, provider llm.Provider, searcher *search.HybridSearcher) {
+func registerMemoryTools(server *mcp.Server, database *db.DB, provider llm.Provider, multiEmbedder *llm.MultiEmbedder, searcher *search.HybridSearcher) {
 	// Register all memory tools with their handlers
-	server.RegisterTool(mcp.MemoryAddTool(), createAddHandler(database, provider))
+	server.RegisterTool(mcp.MemoryAddTool(), createAddHandler(database, provider, multiEmbedder))
 	server.RegisterTool(mcp.MemorySearchTool(), createSearchHandler(searcher))
-	server.RegisterTool(mcp.MemoryUpdateTool(), createUpdateHandler(database, provider))
+	server.RegisterTool(mcp.MemoryUpdateTool(), createUpdateHandler(database, provider, multiEmbedder))
 	server.RegisterTool(mcp.MemoryDeleteTool(), createDeleteHandler(database))
 	server.RegisterTool(mcp.MemoryExportTool(), createExportHandler(database))
 	server.RegisterTool(mcp.MemoryImportTool(), createImportHandler(database, provider))
 }
 
-func createAddHandler(database *db.DB, provider llm.Provider) mcp.Handler {
+func createAddHandler(database *db.DB, provider llm.Provider, multiEmbedder *llm.MultiEmbedder) mcp.Handler {
 	return func(ctx context.Context, params json.RawMessage) (any, error) {
 		var args mcp.MemoryAddArgs
 		if err := json.Unmarshal(params, &args); err != nil {
@@ -250,14 +269,28 @@ func createAddHandler(database *db.DB, provider llm.Provider) mcp.Handler {
 			return nil, fmt.Errorf("add memory: %w", err)
 		}
 
-		// Generate and store embedding
-		embedding, err := provider.Embed(ctx, args.Text)
-		if err != nil {
-			// Log but don't fail - memory is stored, embedding can be added later
-			log.Printf("cortex: warning: failed to generate embedding for memory %d: %v", id, err)
+		// Generate and store embeddings
+		if multiEmbedder != nil {
+			// Multi-model: generate embeddings from all configured models
+			embeddings, err := multiEmbedder.EmbedAll(ctx, args.Text)
+			if err != nil {
+				log.Printf("cortex: warning: failed to generate multi-model embeddings for memory %d: %v", id, err)
+			} else {
+				for model, embedding := range embeddings {
+					if err := database.AddEmbedding(ctx, id, model, embedding); err != nil {
+						log.Printf("cortex: warning: failed to store embedding (model=%s) for memory %d: %v", model, id, err)
+					}
+				}
+			}
 		} else {
-			if err := database.AddEmbedding(ctx, id, provider.EmbedModel(), embedding); err != nil {
-				log.Printf("cortex: warning: failed to store embedding for memory %d: %v", id, err)
+			// Single-model: use the default provider
+			embedding, err := provider.Embed(ctx, args.Text)
+			if err != nil {
+				log.Printf("cortex: warning: failed to generate embedding for memory %d: %v", id, err)
+			} else {
+				if err := database.AddEmbedding(ctx, id, provider.EmbedModel(), embedding); err != nil {
+					log.Printf("cortex: warning: failed to store embedding for memory %d: %v", id, err)
+				}
 			}
 		}
 
@@ -287,10 +320,17 @@ func createSearchHandler(searcher *search.HybridSearcher) mcp.Handler {
 			hybrid = *args.Hybrid
 		}
 
+		// Get model filter if specified
+		model := ""
+		if args.Model != nil {
+			model = *args.Model
+		}
+
 		results, err := searcher.Search(ctx, search.SearchParams{
 			Query:  args.Query,
 			Limit:  k,
 			Hybrid: hybrid,
+			Model:  model,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("search: %w", err)
@@ -313,7 +353,7 @@ func createSearchHandler(searcher *search.HybridSearcher) mcp.Handler {
 	}
 }
 
-func createUpdateHandler(database *db.DB, provider llm.Provider) mcp.Handler {
+func createUpdateHandler(database *db.DB, provider llm.Provider, multiEmbedder *llm.MultiEmbedder) mcp.Handler {
 	return func(ctx context.Context, params json.RawMessage) (any, error) {
 		var args mcp.MemoryUpdateArgs
 		if err := json.Unmarshal(params, &args); err != nil {
@@ -337,14 +377,28 @@ func createUpdateHandler(database *db.DB, provider llm.Provider) mcp.Handler {
 			return nil, fmt.Errorf("update memory: %w", err)
 		}
 
-		// If text was updated, regenerate embedding
+		// If text was updated, regenerate embeddings
 		if args.Patch.Text != nil {
-			embedding, err := provider.Embed(ctx, *args.Patch.Text)
-			if err != nil {
-				log.Printf("cortex: warning: failed to regenerate embedding for memory %d: %v", args.ID, err)
+			if multiEmbedder != nil {
+				// Multi-model: regenerate all embeddings
+				embeddings, err := multiEmbedder.EmbedAll(ctx, *args.Patch.Text)
+				if err != nil {
+					log.Printf("cortex: warning: failed to regenerate multi-model embeddings for memory %d: %v", args.ID, err)
+				} else {
+					for model, embedding := range embeddings {
+						if err := database.AddEmbedding(ctx, args.ID, model, embedding); err != nil {
+							log.Printf("cortex: warning: failed to update embedding (model=%s) for memory %d: %v", model, args.ID, err)
+						}
+					}
+				}
 			} else {
-				if err := database.AddEmbedding(ctx, args.ID, provider.EmbedModel(), embedding); err != nil {
-					log.Printf("cortex: warning: failed to update embedding for memory %d: %v", args.ID, err)
+				embedding, err := provider.Embed(ctx, *args.Patch.Text)
+				if err != nil {
+					log.Printf("cortex: warning: failed to regenerate embedding for memory %d: %v", args.ID, err)
+				} else {
+					if err := database.AddEmbedding(ctx, args.ID, provider.EmbedModel(), embedding); err != nil {
+						log.Printf("cortex: warning: failed to update embedding for memory %d: %v", args.ID, err)
+					}
 				}
 			}
 		}
