@@ -349,3 +349,95 @@ type MemoryImportResult struct {
 	Skipped  int64 `json:"skipped"`
 	Errors   int64 `json:"errors"`
 }
+
+// MemoryEntitiesTool returns the tool definition for memory.entities.
+func MemoryEntitiesTool() Tool {
+	falseVal := false
+	minID := 1.0
+
+	return Tool{
+		Name:        "memory.entities",
+		Description: "Get entities extracted from a specific memory. Returns all entities (people, organizations, technologies, etc.) that were automatically identified in the memory text.",
+		InputSchema: JSONSchema{
+			Type: "object",
+			Properties: map[string]JSONSchema{
+				"memory_id": {
+					Type:        "integer",
+					Description: "The ID of the memory to get entities for.",
+					Minimum:     &minID,
+				},
+			},
+			Required:             []string{"memory_id"},
+			AdditionalProperties: &falseVal,
+		},
+	}
+}
+
+// MemoryRelatedTool returns the tool definition for memory.related.
+func MemoryRelatedTool() Tool {
+	falseVal := false
+	minID := 1.0
+	minK := 1.0
+	maxK := 100.0
+	defaultK := 10.0
+
+	return Tool{
+		Name:        "memory.related",
+		Description: "Find memories that share entities with the given memory. This discovers connections between memories based on common people, organizations, technologies, or concepts.",
+		InputSchema: JSONSchema{
+			Type: "object",
+			Properties: map[string]JSONSchema{
+				"memory_id": {
+					Type:        "integer",
+					Description: "The ID of the memory to find related memories for.",
+					Minimum:     &minID,
+				},
+				"k": {
+					Type:        "integer",
+					Description: "Maximum number of related memories to return (1-100).",
+					Minimum:     &minK,
+					Maximum:     &maxK,
+					Default:     defaultK,
+				},
+			},
+			Required:             []string{"memory_id"},
+			AdditionalProperties: &falseVal,
+		},
+	}
+}
+
+// MemoryEntitiesArgs contains the arguments for memory.entities.
+type MemoryEntitiesArgs struct {
+	MemoryID int64 `json:"memory_id"`
+}
+
+// EntityResult is a single entity in the response.
+type EntityResult struct {
+	ID          int64    `json:"id"`
+	Name        string   `json:"name"`
+	Type        string   `json:"type"`
+	Aliases     []string `json:"aliases,omitempty"`
+	Description *string  `json:"description,omitempty"`
+}
+
+// MemoryEntitiesResult is the result of memory.entities.
+type MemoryEntitiesResult struct {
+	Entities []EntityResult `json:"entities"`
+}
+
+// MemoryRelatedArgs contains the arguments for memory.related.
+type MemoryRelatedArgs struct {
+	MemoryID int64 `json:"memory_id"`
+	K        *int  `json:"k,omitempty"`
+}
+
+// MemoryRelatedResult is a single related memory in the response.
+type MemoryRelatedResult struct {
+	ID         int64    `json:"id"`
+	Text       string   `json:"text"`
+	Kind       string   `json:"kind"`
+	Score      float32  `json:"score"` // Entity overlap score
+	Source     *string  `json:"source,omitempty"`
+	Tags       []string `json:"tags"`
+	Importance float32  `json:"importance"`
+}

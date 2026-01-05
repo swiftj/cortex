@@ -16,8 +16,10 @@ import (
 	"time"
 
 	"github.com/johnswift/cortex/internal/db"
+	"github.com/johnswift/cortex/internal/entity"
 	"github.com/johnswift/cortex/internal/llm"
 	"github.com/johnswift/cortex/internal/mcp"
+	"github.com/johnswift/cortex/internal/reembed"
 	"github.com/johnswift/cortex/internal/search"
 	"github.com/johnswift/cortex/internal/sweeper"
 	"github.com/johnswift/cortex/internal/transfer"
@@ -25,28 +27,33 @@ import (
 
 // Config holds all configuration for the Cortex server.
 type Config struct {
-	DatabaseURL     string
-	TenantID        string
-	WorkspaceID     string
-	LMBackend       string
-	LMModel         string
-	EmbedModel      string
-	EmbedModels     string // Comma-separated list for multi-model embeddings
-	OpenAIKey       string
-	GeminiKey       string
-	SweeperEnabled  bool
-	SweeperInterval time.Duration
-	HealthPort      string
+	DatabaseURL       string
+	TenantID          string
+	WorkspaceID       string
+	LMBackend         string
+	LMModel           string
+	EmbedModel        string
+	EmbedModels       string // Comma-separated list for multi-model embeddings
+	OpenAIKey         string
+	GeminiKey         string
+	SweeperEnabled    bool
+	SweeperInterval   time.Duration
+	HealthPort        string
+	EntityExtraction  bool // Enable LLM-based entity extraction
 }
 
-// CLI flags for export/import operations
+// CLI flags for export/import/reembed operations
 var (
-	exportFile = flag.String("export", "", "Export memories to JSONL file")
-	importFile = flag.String("import", "", "Import memories from JSONL file")
-	withEmbeddings = flag.Bool("with-embeddings", false, "Include embeddings in export")
-	skipExisting = flag.Bool("skip-existing", false, "Skip existing records during import")
+	exportFile           = flag.String("export", "", "Export memories to JSONL file")
+	importFile           = flag.String("import", "", "Import memories from JSONL file")
+	withEmbeddings       = flag.Bool("with-embeddings", false, "Include embeddings in export")
+	skipExisting         = flag.Bool("skip-existing", false, "Skip existing records during import")
 	regenerateEmbeddings = flag.Bool("regenerate-embeddings", false, "Regenerate embeddings during import")
-	dryRun = flag.Bool("dry-run", false, "Validate import without writing to database")
+	dryRun               = flag.Bool("dry-run", false, "Validate import without writing to database")
+	reembedAll           = flag.Bool("reembed", false, "Re-embed all memories with current embedding model")
+	reembedBatchSize     = flag.Int("reembed-batch-size", 100, "Batch size for re-embedding")
+	reembedDelay         = flag.Duration("reembed-delay", 100*time.Millisecond, "Delay between batches")
+	reembedDeleteOld     = flag.Bool("reembed-delete-old", false, "Delete old embeddings after re-embedding")
 )
 
 func main() {
@@ -56,8 +63,8 @@ func main() {
 
 	flag.Parse()
 
-	// Check for CLI mode (export/import)
-	if *exportFile != "" || *importFile != "" {
+	// Check for CLI mode (export/import/reembed)
+	if *exportFile != "" || *importFile != "" || *reembedAll {
 		if err := runCLI(); err != nil {
 			log.Fatalf("cortex: %v", err)
 		}
@@ -122,6 +129,13 @@ func run() error {
 	// Initialize hybrid searcher
 	searcher := search.NewHybridSearcher(database, provider)
 
+	// Initialize entity extractor if enabled
+	var extractor *entity.Extractor
+	if cfg.EntityExtraction {
+		extractor = entity.NewExtractor(provider)
+		log.Println("cortex: entity extraction enabled")
+	}
+
 	// Start health server if HEALTH_PORT is set
 	var healthServer *mcp.HealthServer
 	if cfg.HealthPort != "" {
@@ -144,7 +158,7 @@ func run() error {
 	server := mcp.NewServer("cortex", "1.0.0")
 
 	// Register memory tools
-	registerMemoryTools(server, database, provider, multiEmbedder, searcher)
+	registerMemoryTools(server, database, provider, multiEmbedder, searcher, extractor)
 
 	// Run the MCP server (blocks until context is cancelled)
 	log.Println("cortex: MCP server ready, listening on stdio")
@@ -175,19 +189,26 @@ func loadConfig() (*Config, error) {
 		sweeperEnabled = false
 	}
 
+	// Parse entity extraction enabled (default: false for backward compat)
+	entityExtraction := false
+	if v := getEnv("ENTITY_EXTRACTION", "false"); v == "true" || v == "1" {
+		entityExtraction = true
+	}
+
 	cfg := &Config{
-		DatabaseURL:     getEnv("DATABASE_URL", ""),
-		TenantID:        getEnv("TENANT_ID", "local"),
-		WorkspaceID:     getEnv("WORKSPACE_ID", "default"),
-		LMBackend:       getEnv("LM_BACKEND", "openai"),
-		LMModel:         getEnv("LM_MODEL", "auto"),
-		EmbedModel:      getEnv("EMBED_MODEL", "auto"),
-		EmbedModels:     getEnv("EMBED_MODELS", ""), // Comma-separated for multi-model
-		OpenAIKey:       getEnv("OPENAI_API_KEY", ""),
-		GeminiKey:       getEnv("GEMINI_API_KEY", ""),
-		SweeperEnabled:  sweeperEnabled,
-		SweeperInterval: sweeperInterval,
-		HealthPort:      getEnv("HEALTH_PORT", ""),
+		DatabaseURL:       getEnv("DATABASE_URL", ""),
+		TenantID:          getEnv("TENANT_ID", "local"),
+		WorkspaceID:       getEnv("WORKSPACE_ID", "default"),
+		LMBackend:         getEnv("LM_BACKEND", "openai"),
+		LMModel:           getEnv("LM_MODEL", "auto"),
+		EmbedModel:        getEnv("EMBED_MODEL", "auto"),
+		EmbedModels:       getEnv("EMBED_MODELS", ""), // Comma-separated for multi-model
+		OpenAIKey:         getEnv("OPENAI_API_KEY", ""),
+		GeminiKey:         getEnv("GEMINI_API_KEY", ""),
+		SweeperEnabled:    sweeperEnabled,
+		SweeperInterval:   sweeperInterval,
+		HealthPort:        getEnv("HEALTH_PORT", ""),
+		EntityExtraction:  entityExtraction,
 	}
 
 	// Validate required configuration
@@ -223,17 +244,23 @@ func initLLMProvider(cfg *Config) (llm.Provider, error) {
 	return llm.NewProvider(cfg.LMBackend, apiKey, cfg.LMModel, cfg.EmbedModel)
 }
 
-func registerMemoryTools(server *mcp.Server, database *db.DB, provider llm.Provider, multiEmbedder *llm.MultiEmbedder, searcher *search.HybridSearcher) {
+func registerMemoryTools(server *mcp.Server, database *db.DB, provider llm.Provider, multiEmbedder *llm.MultiEmbedder, searcher *search.HybridSearcher, extractor *entity.Extractor) {
 	// Register all memory tools with their handlers
-	server.RegisterTool(mcp.MemoryAddTool(), createAddHandler(database, provider, multiEmbedder))
+	server.RegisterTool(mcp.MemoryAddTool(), createAddHandler(database, provider, multiEmbedder, extractor))
 	server.RegisterTool(mcp.MemorySearchTool(), createSearchHandler(searcher))
 	server.RegisterTool(mcp.MemoryUpdateTool(), createUpdateHandler(database, provider, multiEmbedder))
 	server.RegisterTool(mcp.MemoryDeleteTool(), createDeleteHandler(database))
 	server.RegisterTool(mcp.MemoryExportTool(), createExportHandler(database))
 	server.RegisterTool(mcp.MemoryImportTool(), createImportHandler(database, provider))
+
+	// Register entity tools if extractor is enabled
+	if extractor != nil {
+		server.RegisterTool(mcp.MemoryEntitiesTool(), createEntitiesHandler(database))
+		server.RegisterTool(mcp.MemoryRelatedTool(), createRelatedHandler(database))
+	}
 }
 
-func createAddHandler(database *db.DB, provider llm.Provider, multiEmbedder *llm.MultiEmbedder) mcp.Handler {
+func createAddHandler(database *db.DB, provider llm.Provider, multiEmbedder *llm.MultiEmbedder, extractor *entity.Extractor) mcp.Handler {
 	return func(ctx context.Context, params json.RawMessage) (any, error) {
 		var args mcp.MemoryAddArgs
 		if err := json.Unmarshal(params, &args); err != nil {
@@ -294,8 +321,71 @@ func createAddHandler(database *db.DB, provider llm.Provider, multiEmbedder *llm
 			}
 		}
 
+		// Extract and store entities if enabled
+		if extractor != nil {
+			extractAndStoreEntities(ctx, database, extractor, id, args.Text)
+		}
+
 		return mcp.MemoryAddResult{ID: id}, nil
 	}
+}
+
+// extractAndStoreEntities extracts entities from text and links them to the memory.
+func extractAndStoreEntities(ctx context.Context, database *db.DB, extractor *entity.Extractor, memoryID int64, text string) {
+	result, err := extractor.Extract(ctx, text)
+	if err != nil {
+		log.Printf("cortex: warning: failed to extract entities for memory %d: %v", memoryID, err)
+		return
+	}
+
+	if len(result.Entities) == 0 {
+		return
+	}
+
+	// Store entities and link to memory
+	entityIDMap := make(map[string]int64) // name -> id for relation linking
+	for _, e := range result.Entities {
+		entityID, err := database.AddEntity(ctx, db.AddEntityParams{
+			Name:        e.Name,
+			Type:        db.EntityType(e.Type),
+			Aliases:     e.Aliases,
+			Description: ptrIfNotEmpty(e.Description),
+			Meta:        e.Meta,
+		})
+		if err != nil {
+			log.Printf("cortex: warning: failed to store entity %q: %v", e.Name, err)
+			continue
+		}
+
+		entityIDMap[e.Name] = entityID
+
+		// Link entity to memory
+		if err := database.LinkMemoryEntity(ctx, memoryID, entityID, ptrIfNotEmpty(e.Role), e.Confidence); err != nil {
+			log.Printf("cortex: warning: failed to link entity %q to memory %d: %v", e.Name, memoryID, err)
+		}
+	}
+
+	// Store entity relations
+	for _, r := range result.Relations {
+		sourceID, sourceOK := entityIDMap[r.SourceName]
+		targetID, targetOK := entityIDMap[r.TargetName]
+		if !sourceOK || !targetOK {
+			continue // Skip if entities weren't found/stored
+		}
+		if err := database.AddEntityRelation(ctx, sourceID, targetID, r.RelationType); err != nil {
+			log.Printf("cortex: warning: failed to store relation %s->%s: %v", r.SourceName, r.TargetName, err)
+		}
+	}
+
+	log.Printf("cortex: extracted %d entities for memory %d", len(result.Entities), memoryID)
+}
+
+// ptrIfNotEmpty returns a pointer to the string if non-empty, nil otherwise.
+func ptrIfNotEmpty(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
 }
 
 func createSearchHandler(searcher *search.HybridSearcher) mcp.Handler {
@@ -426,6 +516,77 @@ func createDeleteHandler(database *db.DB) mcp.Handler {
 	}
 }
 
+func createEntitiesHandler(database *db.DB) mcp.Handler {
+	return func(ctx context.Context, params json.RawMessage) (any, error) {
+		var args mcp.MemoryEntitiesArgs
+		if err := json.Unmarshal(params, &args); err != nil {
+			return nil, fmt.Errorf("invalid arguments: %w", err)
+		}
+
+		if args.MemoryID == 0 {
+			return nil, fmt.Errorf("memory_id is required")
+		}
+
+		entities, err := database.GetMemoryEntities(ctx, args.MemoryID)
+		if err != nil {
+			return nil, fmt.Errorf("get entities: %w", err)
+		}
+
+		result := mcp.MemoryEntitiesResult{
+			Entities: make([]mcp.EntityResult, len(entities)),
+		}
+		for i, e := range entities {
+			result.Entities[i] = mcp.EntityResult{
+				ID:          e.ID,
+				Name:        e.Name,
+				Type:        string(e.Type),
+				Aliases:     e.Aliases,
+				Description: e.Description,
+			}
+		}
+
+		return result, nil
+	}
+}
+
+func createRelatedHandler(database *db.DB) mcp.Handler {
+	return func(ctx context.Context, params json.RawMessage) (any, error) {
+		var args mcp.MemoryRelatedArgs
+		if err := json.Unmarshal(params, &args); err != nil {
+			return nil, fmt.Errorf("invalid arguments: %w", err)
+		}
+
+		if args.MemoryID == 0 {
+			return nil, fmt.Errorf("memory_id is required")
+		}
+
+		k := 10
+		if args.K != nil {
+			k = *args.K
+		}
+
+		related, err := database.GetRelatedMemories(ctx, args.MemoryID, k)
+		if err != nil {
+			return nil, fmt.Errorf("get related memories: %w", err)
+		}
+
+		results := make([]mcp.MemoryRelatedResult, len(related))
+		for i, m := range related {
+			results[i] = mcp.MemoryRelatedResult{
+				ID:         m.ID,
+				Text:       m.Text,
+				Kind:       m.Kind,
+				Score:      m.Score,
+				Source:     m.Source,
+				Tags:       m.Tags,
+				Importance: m.Importance,
+			}
+		}
+
+		return results, nil
+	}
+}
+
 func getEnv(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
@@ -472,6 +633,15 @@ func runCLI() error {
 		return runImport(ctx, database, provider)
 	}
 
+	// Handle re-embedding
+	if *reembedAll {
+		provider, err := initLLMProvider(cfg)
+		if err != nil {
+			return fmt.Errorf("init LLM provider: %w", err)
+		}
+		return runReembed(ctx, database, provider, cfg)
+	}
+
 	return nil
 }
 
@@ -491,21 +661,48 @@ func loadConfigForCLI() (*Config, error) {
 		return nil, fmt.Errorf("DATABASE_URL environment variable is required")
 	}
 
-	// Only require API key if regenerating embeddings
-	if *regenerateEmbeddings {
+	// Only require API key if regenerating embeddings or re-embedding
+	if *regenerateEmbeddings || *reembedAll {
 		switch cfg.LMBackend {
 		case "openai":
 			if cfg.OpenAIKey == "" {
-				return nil, fmt.Errorf("OPENAI_API_KEY required when using --regenerate-embeddings")
+				return nil, fmt.Errorf("OPENAI_API_KEY required for embedding operations")
 			}
 		case "gemini":
 			if cfg.GeminiKey == "" {
-				return nil, fmt.Errorf("GEMINI_API_KEY required when using --regenerate-embeddings")
+				return nil, fmt.Errorf("GEMINI_API_KEY required for embedding operations")
 			}
 		}
 	}
 
 	return cfg, nil
+}
+
+func runReembed(ctx context.Context, database *db.DB, provider llm.Provider, cfg *Config) error {
+	log.Printf("cortex: starting re-embedding (model=%s, batch=%d, delay=%v)", provider.EmbedModel(), *reembedBatchSize, *reembedDelay)
+
+	r := reembed.NewReembedder(database.Pool(), provider, cfg.TenantID, cfg.WorkspaceID).
+		WithConfig(reembed.Config{
+			BatchSize:           *reembedBatchSize,
+			DelayBetweenBatches: *reembedDelay,
+			DeleteOldEmbeddings: *reembedDeleteOld,
+			SkipExisting:        true,
+		})
+
+	stats, err := r.ReembedAll(ctx, func(processed, total int64, memoryID int64, err error) {
+		if err != nil {
+			log.Printf("cortex: error re-embedding memory %d: %v", memoryID, err)
+		} else if processed%100 == 0 || processed == total {
+			log.Printf("cortex: re-embedded %d/%d memories (%.1f%%)", processed, total, float64(processed)/float64(total)*100)
+		}
+	})
+	if err != nil {
+		return fmt.Errorf("reembed: %w", err)
+	}
+
+	log.Printf("cortex: re-embedding complete - total=%d processed=%d skipped=%d errors=%d duration=%v",
+		stats.Total, stats.Processed, stats.Skipped, stats.Errors, stats.Duration)
+	return nil
 }
 
 func runExport(ctx context.Context, database *db.DB) error {
