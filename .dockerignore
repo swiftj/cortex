@@ -1,0 +1,43 @@
+# Git
+.git
+.gitignore
+
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Claude/AI tooling
+.claude/
+.serena/
+.mcp.json
+
+# Build artifacts
+bin/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test files
+*_test.go
+testdata/
+
+# Documentation (except README)
+*.md
+!README.md
+
+# Environment files
+.env
+.env.*
+*.env
+
+# Temporary files
+tmp/
+*.tmp
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
