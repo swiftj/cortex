@@ -12,17 +12,18 @@ import (
 
 // Memory represents a stored memory record.
 type Memory struct {
-	ID         int64             `json:"id"`
-	TenantID   string            `json:"tenant_id"`
-	Kind       string            `json:"kind"`
-	Text       string            `json:"text"`
-	Source     *string           `json:"source,omitempty"`
-	CreatedAt  time.Time         `json:"created_at"`
-	UpdatedAt  time.Time         `json:"updated_at"`
-	Tags       []string          `json:"tags"`
-	Importance float32           `json:"importance"`
-	TTLDays    *int              `json:"ttl_days,omitempty"`
-	Meta       map[string]any    `json:"meta,omitempty"`
+	ID          int64          `json:"id"`
+	TenantID    string         `json:"tenant_id"`
+	WorkspaceID string         `json:"workspace_id"`
+	Kind        string         `json:"kind"`
+	Text        string         `json:"text"`
+	Source      *string        `json:"source,omitempty"`
+	CreatedAt   time.Time      `json:"created_at"`
+	UpdatedAt   time.Time      `json:"updated_at"`
+	Tags        []string       `json:"tags"`
+	Importance  float32        `json:"importance"`
+	TTLDays     *int           `json:"ttl_days,omitempty"`
+	Meta        map[string]any `json:"meta,omitempty"`
 }
 
 // MemoryWithScore includes similarity score for search results.
@@ -58,10 +59,10 @@ func (db *DB) AddMemory(ctx context.Context, params AddMemoryParams) (int64, err
 
 	var id int64
 	err = db.pool.QueryRow(ctx, `
-		INSERT INTO memories (tenant_id, kind, text, source, tags, importance, ttl_days, meta)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		INSERT INTO memories (tenant_id, workspace_id, kind, text, source, tags, importance, ttl_days, meta)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		RETURNING id
-	`, db.tenantID, params.Kind, params.Text, params.Source, params.Tags, params.Importance, params.TTLDays, metaJSON).Scan(&id)
+	`, db.tenantID, db.workspaceID, params.Kind, params.Text, params.Source, params.Tags, params.Importance, params.TTLDays, metaJSON).Scan(&id)
 
 	if err != nil {
 		return 0, fmt.Errorf("insert memory: %w", err)
@@ -95,11 +96,11 @@ func (db *DB) GetMemory(ctx context.Context, id int64) (*Memory, error) {
 	var metaJSON []byte
 
 	err := db.pool.QueryRow(ctx, `
-		SELECT id, tenant_id, kind, text, source, created_at, updated_at, tags, importance, ttl_days, meta
+		SELECT id, tenant_id, workspace_id, kind, text, source, created_at, updated_at, tags, importance, ttl_days, meta
 		FROM memories
-		WHERE id = $1 AND tenant_id = $2
-	`, id, db.tenantID).Scan(
-		&m.ID, &m.TenantID, &m.Kind, &m.Text, &m.Source,
+		WHERE id = $1 AND tenant_id = $2 AND workspace_id = $3
+	`, id, db.tenantID, db.workspaceID).Scan(
+		&m.ID, &m.TenantID, &m.WorkspaceID, &m.Kind, &m.Text, &m.Source,
 		&m.CreatedAt, &m.UpdatedAt, &m.Tags, &m.Importance, &m.TTLDays, &metaJSON,
 	)
 
@@ -134,8 +135,8 @@ type UpdateMemoryParams struct {
 func (db *DB) UpdateMemory(ctx context.Context, id int64, params UpdateMemoryParams) error {
 	// Build dynamic update query
 	setClauses := []string{"updated_at = now()"}
-	args := []any{id, db.tenantID}
-	argIdx := 3
+	args := []any{id, db.tenantID, db.workspaceID}
+	argIdx := 4
 
 	if params.Kind != nil {
 		setClauses = append(setClauses, fmt.Sprintf("kind = $%d", argIdx))
@@ -178,7 +179,7 @@ func (db *DB) UpdateMemory(ctx context.Context, id int64, params UpdateMemoryPar
 
 	query := fmt.Sprintf(`
 		UPDATE memories SET %s
-		WHERE id = $1 AND tenant_id = $2
+		WHERE id = $1 AND tenant_id = $2 AND workspace_id = $3
 	`, joinStrings(setClauses, ", "))
 
 	result, err := db.pool.Exec(ctx, query, args...)
@@ -196,8 +197,8 @@ func (db *DB) UpdateMemory(ctx context.Context, id int64, params UpdateMemoryPar
 // DeleteMemory removes a memory by ID.
 func (db *DB) DeleteMemory(ctx context.Context, id int64) error {
 	result, err := db.pool.Exec(ctx, `
-		DELETE FROM memories WHERE id = $1 AND tenant_id = $2
-	`, id, db.tenantID)
+		DELETE FROM memories WHERE id = $1 AND tenant_id = $2 AND workspace_id = $3
+	`, id, db.tenantID, db.workspaceID)
 
 	if err != nil {
 		return fmt.Errorf("delete memory: %w", err)
@@ -226,15 +227,15 @@ func (db *DB) VectorSearch(ctx context.Context, params VectorSearchParams) ([]Me
 
 	rows, err := db.pool.Query(ctx, `
 		SELECT
-			m.id, m.tenant_id, m.kind, m.text, m.source,
+			m.id, m.tenant_id, m.workspace_id, m.kind, m.text, m.source,
 			m.created_at, m.updated_at, m.tags, m.importance, m.ttl_days, m.meta,
 			1 - (e.embedding <=> $1) AS score
 		FROM memories m
 		JOIN memory_embeddings e ON m.id = e.memory_id
-		WHERE m.tenant_id = $2
+		WHERE m.tenant_id = $2 AND m.workspace_id = $3
 		ORDER BY e.embedding <=> $1
-		LIMIT $3
-	`, vec, db.tenantID, params.Limit)
+		LIMIT $4
+	`, vec, db.tenantID, db.workspaceID, params.Limit)
 
 	if err != nil {
 		return nil, fmt.Errorf("vector search: %w", err)
@@ -258,14 +259,14 @@ func (db *DB) LexicalSearch(ctx context.Context, params LexicalSearchParams) ([]
 
 	rows, err := db.pool.Query(ctx, `
 		SELECT
-			m.id, m.tenant_id, m.kind, m.text, m.source,
+			m.id, m.tenant_id, m.workspace_id, m.kind, m.text, m.source,
 			m.created_at, m.updated_at, m.tags, m.importance, m.ttl_days, m.meta,
 			similarity(m.text, $1) AS score
 		FROM memories m
-		WHERE m.tenant_id = $2 AND m.text % $1
+		WHERE m.tenant_id = $2 AND m.workspace_id = $3 AND m.text % $1
 		ORDER BY score DESC
-		LIMIT $3
-	`, params.Query, db.tenantID, params.Limit)
+		LIMIT $4
+	`, params.Query, db.tenantID, db.workspaceID, params.Limit)
 
 	if err != nil {
 		return nil, fmt.Errorf("lexical search: %w", err)
@@ -283,7 +284,7 @@ func scanMemoriesWithScore(rows pgx.Rows) ([]MemoryWithScore, error) {
 		var metaJSON []byte
 
 		err := rows.Scan(
-			&m.ID, &m.TenantID, &m.Kind, &m.Text, &m.Source,
+			&m.ID, &m.TenantID, &m.WorkspaceID, &m.Kind, &m.Text, &m.Source,
 			&m.CreatedAt, &m.UpdatedAt, &m.Tags, &m.Importance, &m.TTLDays, &metaJSON,
 			&m.Score,
 		)
