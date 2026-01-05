@@ -31,8 +31,8 @@ cd cortex
 # Create .env file with your API key
 echo "OPENAI_API_KEY=sk-..." > .env
 # or for Gemini:
-# echo "GEMINI_API_KEY=..." > .env
-# echo "LM_BACKEND=gemini" >> .env
+echo "GEMINI_API_KEY=..." > .env
+echo "LM_BACKEND=gemini" >> .env
 
 # Start the services
 docker-compose up -d
@@ -65,7 +65,7 @@ Configure `.mcp.json` to use the Docker container:
 
 #### Prerequisites
 
-- Go 1.22+
+- Go 1.24+
 - PostgreSQL 14+ with extensions:
   - `pgvector` - Vector similarity search
   - `pg_trgm` - Trigram text similarity
