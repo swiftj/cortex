@@ -35,6 +35,7 @@ type Config struct {
 	GeminiKey       string
 	SweeperEnabled  bool
 	SweeperInterval time.Duration
+	HealthPort      string
 }
 
 // CLI flags for export/import operations
@@ -103,6 +104,16 @@ func run() error {
 	// Initialize hybrid searcher
 	searcher := search.NewHybridSearcher(database, provider)
 
+	// Start health server if HEALTH_PORT is set
+	var healthServer *mcp.HealthServer
+	if cfg.HealthPort != "" {
+		healthServer = mcp.NewHealthServer(cfg.HealthPort)
+		if err := healthServer.Start(); err != nil {
+			return fmt.Errorf("start health server: %w", err)
+		}
+		defer healthServer.Shutdown(ctx)
+	}
+
 	// Start TTL sweeper if enabled
 	var sw *sweeper.Sweeper
 	if cfg.SweeperEnabled {
@@ -157,6 +168,7 @@ func loadConfig() (*Config, error) {
 		GeminiKey:       getEnv("GEMINI_API_KEY", ""),
 		SweeperEnabled:  sweeperEnabled,
 		SweeperInterval: sweeperInterval,
+		HealthPort:      getEnv("HEALTH_PORT", ""),
 	}
 
 	// Validate required configuration

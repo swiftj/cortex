@@ -15,14 +15,57 @@ Cortex provides persistent memory capabilities for AI agents, enabling them to s
 
 ## Quick Start
 
-### Prerequisites
+### Option 1: Docker (Recommended)
+
+The easiest way to run Cortex is with Docker Compose, which includes PostgreSQL with pgvector pre-configured.
+
+```bash
+# Clone the repository
+git clone https://github.com/johnswift/cortex.git
+cd cortex
+
+# Create .env file with your API key
+echo "OPENAI_API_KEY=sk-..." > .env
+# or for Gemini:
+# echo "GEMINI_API_KEY=..." > .env
+# echo "LM_BACKEND=gemini" >> .env
+
+# Start the services
+docker-compose up -d
+
+# View logs
+docker-compose logs -f cortex
+```
+
+#### Using with Claude Code (Docker)
+
+Configure `.mcp.json` to use the Docker container:
+
+```json
+{
+  "mcpServers": {
+    "cortex": {
+      "type": "stdio",
+      "command": "docker-compose",
+      "args": ["-f", "/path/to/cortex/docker-compose.yml", "exec", "-T", "cortex", "/usr/local/bin/cortex"],
+      "env": {
+        "OPENAI_API_KEY": "${OPENAI_API_KEY}"
+      }
+    }
+  }
+}
+```
+
+### Option 2: Manual Installation
+
+#### Prerequisites
 
 - Go 1.22+
 - PostgreSQL 14+ with extensions:
   - `pgvector` - Vector similarity search
   - `pg_trgm` - Trigram text similarity
 
-### Database Setup
+#### Database Setup
 
 ```bash
 # Create database
@@ -33,13 +76,13 @@ psql cortex -c 'CREATE EXTENSION IF NOT EXISTS vector;'
 psql cortex -c 'CREATE EXTENSION IF NOT EXISTS pg_trgm;'
 ```
 
-### Build
+#### Build
 
 ```bash
 CGO_ENABLED=0 go build -o bin/cortex ./cmd/mcpserver
 ```
 
-### Configure
+#### Configure
 
 Set environment variables:
 
@@ -52,6 +95,7 @@ export TENANT_ID="local"
 export LM_BACKEND="openai"      # or "gemini"
 export LM_MODEL="auto"          # chat model for normalization
 export EMBED_MODEL="auto"       # embedding model
+export HEALTH_PORT=""           # optional: enable HTTP health endpoint (e.g., "8080")
 
 # API Keys (one required based on LM_BACKEND)
 export OPENAI_API_KEY="sk-..."
@@ -59,7 +103,7 @@ export OPENAI_API_KEY="sk-..."
 export GEMINI_API_KEY="..."
 ```
 
-### Run
+#### Run
 
 ```bash
 ./bin/cortex
