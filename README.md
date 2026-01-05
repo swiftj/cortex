@@ -165,6 +165,151 @@ Use `WORKSPACE_ID` to isolate memories per project:
 }
 ```
 
+## Getting Claude Code to Reliably Use Cortex
+
+Having Cortex installed is only half the battle. The real power comes from Claude Code **proactively** using memory tools during your development sessions. Here are proven strategies to achieve reliable memory usage.
+
+### Strategy 1: Project Instructions (CLAUDE.md)
+
+Create a `CLAUDE.md` file in your project root with explicit memory directives:
+
+```markdown
+# Project Memory Protocol
+
+## Memory Requirements
+This project uses Cortex for persistent memory. You MUST:
+
+1. **At session start**: Search memories for project context
+   ```
+   memory.search({ query: "project architecture decisions" })
+   memory.search({ query: "coding standards preferences" })
+   ```
+
+2. **When learning something new**: Store it immediately
+   - User preferences → `memory.add` with kind: "preference"
+   - Architecture decisions → `memory.add` with kind: "fact", importance: 0.9
+   - Gotchas/pitfalls → `memory.add` with kind: "note", tags: ["gotcha"]
+
+3. **Before major changes**: Check for relevant context
+   ```
+   memory.search({ query: "<relevant topic>" })
+   ```
+
+4. **After completing features**: Document learnings
+   ```
+   memory.add({
+     text: "Completed X using Y approach because Z",
+     kind: "fact",
+     tags: ["implementation", "decision"]
+   })
+   ```
+```
+
+### Strategy 2: Explicit Prompting Patterns
+
+Use these prompt patterns to trigger memory operations:
+
+**Session Start:**
+> "Check your memory for any context about this project before we begin."
+
+**During Development:**
+> "Remember that we decided to use X approach for Y."
+> "Store this as an important architectural decision."
+> "What do you remember about how we handle authentication?"
+
+**Session End:**
+> "Save the key learnings from this session to memory."
+> "What should we remember for next time?"
+
+### Strategy 3: Workspace Isolation
+
+Configure automatic workspace detection in `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "cortex": {
+      "type": "stdio",
+      "command": "/path/to/cortex",
+      "env": {
+        "DATABASE_URL": "postgres://localhost:5432/cortex?sslmode=disable",
+        "WORKSPACE_ID": "${PWD##*/}",
+        "OPENAI_API_KEY": "${OPENAI_API_KEY}"
+      },
+      "scope": ["${PWD}"]
+    }
+  }
+}
+```
+
+This ensures `my-webapp` project memories stay separate from `api-service` memories.
+
+### Strategy 4: Bootstrap Session Pattern
+
+Start each coding session with a bootstrap prompt:
+
+> "Let's start a development session. First:
+> 1. Search your memory for recent work on this project
+> 2. Search for any user preferences or coding standards
+> 3. Tell me what you remember, then we'll continue"
+
+This primes Claude Code to engage with memory from the start.
+
+### Practical Workflow Examples
+
+**Feature Development:**
+```
+You: "I want to add user authentication"
+Claude: *searches memory for auth-related decisions*
+Claude: "I found we previously decided to use JWT tokens. Let me search for more context..."
+*implements feature*
+Claude: *stores implementation decisions*
+```
+
+**Bug Investigation:**
+```
+You: "There's a bug in the payment flow"
+Claude: *searches memory for payment-related notes*
+Claude: "I remember we had a similar issue with currency conversion. Let me check those notes..."
+```
+
+**Code Review:**
+```
+You: "Review this PR"
+Claude: *searches memory for coding standards and past decisions*
+Claude: "Based on our established patterns, I notice this doesn't follow our error handling convention..."
+```
+
+### Memory Categories to Establish
+
+Build a rich memory foundation with these categories:
+
+| Kind | Use For | Importance |
+|------|---------|------------|
+| `preference` | User coding style, tool preferences | 0.7-0.9 |
+| `fact` | Architecture decisions, API contracts | 0.8-1.0 |
+| `note` | Implementation details, gotchas | 0.5-0.7 |
+| `project` | Project-specific context | 0.6-0.8 |
+| `identity` | Team info, stakeholders | 0.5-0.6 |
+
+### Pro Tips
+
+1. **High-importance memories surface first** - Set `importance: 0.9` for critical decisions
+2. **Use tags consistently** - Tags like `["auth", "security"]` help with targeted searches
+3. **Set TTL for temporary context** - Use `ttl_days: 30` for sprint-specific notes
+4. **Review and prune periodically** - Export memories and clean up outdated entries
+5. **Seed initial context** - At project start, manually add key architecture decisions
+
+### Common Pitfalls
+
+| Problem | Solution |
+|---------|----------|
+| Claude doesn't use memory | Add explicit instructions to CLAUDE.md |
+| Too many irrelevant results | Use more specific search queries and tags |
+| Memories getting stale | Enable TTL sweeper, set appropriate `ttl_days` |
+| Cross-project contamination | Ensure `WORKSPACE_ID` is set correctly |
+| Lost context between sessions | Use bootstrap prompts at session start |
+
 ## MCP Tools
 
 ### `memory.add`
