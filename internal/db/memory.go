@@ -87,6 +87,12 @@ func (db *DB) AddEmbedding(ctx context.Context, memoryID int64, model string, em
 		return fmt.Errorf("insert embedding: %w", err)
 	}
 
+	// Lazily create HNSW index after first embedding insert
+	if err := db.EnsureHNSWIndex(ctx); err != nil {
+		// Log but don't fail - index creation is an optimization
+		fmt.Printf("warning: failed to create HNSW index: %v\n", err)
+	}
+
 	return nil
 }
 

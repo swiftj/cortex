@@ -2,16 +2,21 @@
 -- Enables light knowledge graph with entities extracted from memories
 
 -- Entity types for categorization
-CREATE TYPE entity_type AS ENUM (
-    'person',      -- People, names
-    'organization', -- Companies, teams, groups
-    'location',    -- Places, addresses
-    'concept',     -- Abstract ideas, topics
-    'technology',  -- Tech stack, tools, frameworks
-    'project',     -- Project names, codenames
-    'event',       -- Meetings, deadlines, milestones
-    'other'        -- Catch-all for uncategorized
-);
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'entity_type') THEN
+        CREATE TYPE entity_type AS ENUM (
+            'person',      -- People, names
+            'organization', -- Companies, teams, groups
+            'location',    -- Places, addresses
+            'concept',     -- Abstract ideas, topics
+            'technology',  -- Tech stack, tools, frameworks
+            'project',     -- Project names, codenames
+            'event',       -- Meetings, deadlines, milestones
+            'other'        -- Catch-all for uncategorized
+        );
+    END IF;
+END$$;
 
 -- Entities table - stores unique entities across all memories
 CREATE TABLE IF NOT EXISTS entities (

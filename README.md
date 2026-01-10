@@ -25,7 +25,7 @@ The easiest way to run Cortex is with Docker Compose, which includes PostgreSQL 
 
 ```bash
 # Clone the repository
-git clone https://github.com/johnswift/cortex.git
+git clone https://github.com/swiftj/cortex.git
 cd cortex
 
 # Create .env file with your API key

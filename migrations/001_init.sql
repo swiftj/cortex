@@ -21,10 +21,11 @@ CREATE TABLE IF NOT EXISTS memories (
 
 -- Embeddings table (separate for flexibility with multiple models)
 CREATE TABLE IF NOT EXISTS memory_embeddings (
-  memory_id  BIGINT PRIMARY KEY REFERENCES memories(id) ON DELETE CASCADE,
+  memory_id  BIGINT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
   model      TEXT NOT NULL,     -- "text-embedding-3-large", "gemini-embedding-2", etc.
   dims       INT  NOT NULL,
-  embedding  VECTOR NOT NULL
+  embedding  VECTOR NOT NULL,
+  PRIMARY KEY (memory_id, model)
 );
 
 -- Text index for lexical similarity (trigram)
@@ -43,7 +44,7 @@ CREATE INDEX IF NOT EXISTS idx_memories_kind
 CREATE INDEX IF NOT EXISTS idx_memories_tags
   ON memories USING gin (tags);
 
--- HNSW index for vector similarity (best speed/recall; more RAM)
--- Using cosine distance for normalized embeddings
-CREATE INDEX IF NOT EXISTS idx_memory_embed_hnsw
-  ON memory_embeddings USING hnsw (embedding vector_cosine_ops);
+-- NOTE: HNSW index for vector similarity is created lazily after first embedding insert
+-- because pgvector requires knowing dimensions. See internal/db/ensure_index.go
+-- The index will be created with: CREATE INDEX idx_memory_embed_hnsw
+--   ON memory_embeddings USING hnsw (embedding vector_cosine_ops);
