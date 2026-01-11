@@ -1,8 +1,19 @@
 # Cortex
 
-A local-first MCP (Model Context Protocol) memory server for Claude Code, written in Go.
+**A local-first MCP memory server for Claude Code** — Persistent memory for AI agents with hybrid vector + lexical search.
 
-Cortex provides persistent memory capabilities for AI agents, enabling them to store, search, and retrieve information across sessions using hybrid vector + lexical search.
+[![Version](https://img.shields.io/badge/dynamic/regex?url=https%3A%2F%2Fraw.githubusercontent.com%2Fswiftj%2Fcortex%2Fmain%2FVERSION&search=%5E%5B%5E%5Cn%5D%2B&style=flat-square&label=VERSION&color=olive)](https://github.com/swiftj/cortex/releases)
+[![Go](https://img.shields.io/badge/Go-1.24%2B-00ADD8?style=flat-square&logo=go&logoColor=white)](https://go.dev/)
+[![macOS](https://img.shields.io/badge/macOS-000000?style=flat-square&logo=apple&logoColor=white)](https://github.com/swiftj/cortex)
+[![Linux](https://img.shields.io/badge/Linux-FCC624?style=flat-square&logo=linux&logoColor=black)](https://github.com/swiftj/cortex)
+[![License](https://img.shields.io/badge/License-MIT-gray?style=flat-square)](LICENSE)
+
+[![AI](https://img.shields.io/badge/AI-Multi--Provider-E91E8C?style=flat-square)](https://github.com/swiftj/cortex)
+[![Claude Code](https://img.shields.io/badge/Claude%20Code-Compatible-CD6155?style=flat-square)](https://claude.ai/code)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-pgvector-4169E1?style=flat-square&logo=postgresql&logoColor=white)](https://github.com/pgvector/pgvector)
+[![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/swiftj/cortex)
+
+---
 
 ## Features
 
