@@ -2,16 +2,20 @@
 
 **A local-first MCP memory server for Claude Code** — Persistent memory for AI agents with hybrid vector + lexical search.
 
-[![Version](https://img.shields.io/badge/dynamic/regex?url=https%3A%2F%2Fraw.githubusercontent.com%2Fswiftj%2Fcortex%2Fmain%2FVERSION&search=%5E%5B%5E%5Cn%5D%2B&style=flat-square&label=VERSION&color=olive)](https://github.com/swiftj/cortex/releases)
-[![Go](https://img.shields.io/badge/Go-1.24%2B-00ADD8?style=flat-square&logo=go&logoColor=white)](https://go.dev/)
-[![macOS](https://img.shields.io/badge/macOS-000000?style=flat-square&logo=apple&logoColor=white)](https://github.com/swiftj/cortex)
-[![Linux](https://img.shields.io/badge/Linux-FCC624?style=flat-square&logo=linux&logoColor=black)](https://github.com/swiftj/cortex)
-[![License](https://img.shields.io/badge/License-MIT-gray?style=flat-square)](LICENSE)
+<p align="center">
+  <a href="https://github.com/swiftj/cortex/releases"><img src="https://img.shields.io/badge/dynamic/regex?url=https%3A%2F%2Fraw.githubusercontent.com%2Fswiftj%2Fcortex%2Fmain%2FVERSION&search=%5E%5B%5E%5Cn%5D%2B&style=flat-square&label=VERSION&color=olive" alt="Version"></a>
+  <a href="https://go.dev/"><img src="https://img.shields.io/badge/Go-1.24%2B-00ADD8?style=flat-square&logo=go&logoColor=white" alt="Go"></a>
+  <a href="https://github.com/swiftj/cortex"><img src="https://img.shields.io/badge/macOS-000000?style=flat-square&logo=apple&logoColor=white" alt="macOS"></a>
+  <a href="https://github.com/swiftj/cortex"><img src="https://img.shields.io/badge/Linux-FCC624?style=flat-square&logo=linux&logoColor=black" alt="Linux"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-gray?style=flat-square" alt="License"></a>
+</p>
 
-[![AI](https://img.shields.io/badge/AI-Multi--Provider-E91E8C?style=flat-square)](https://github.com/swiftj/cortex)
-[![Claude Code](https://img.shields.io/badge/Claude%20Code-Compatible-CD6155?style=flat-square)](https://claude.ai/code)
-[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-pgvector-4169E1?style=flat-square&logo=postgresql&logoColor=white)](https://github.com/pgvector/pgvector)
-[![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/swiftj/cortex)
+<p align="center">
+  <a href="https://github.com/swiftj/cortex"><img src="https://img.shields.io/badge/AI-Multi--Provider-E91E8C?style=flat-square" alt="AI Multi-Provider"></a>
+  <a href="https://claude.ai/code"><img src="https://img.shields.io/badge/Claude%20Code-Compatible-CD6155?style=flat-square" alt="Claude Code Compatible"></a>
+  <a href="https://github.com/pgvector/pgvector"><img src="https://img.shields.io/badge/PostgreSQL-pgvector-4169E1?style=flat-square&logo=postgresql&logoColor=white" alt="PostgreSQL pgvector"></a>
+  <a href="https://github.com/swiftj/cortex"><img src="https://img.shields.io/badge/Docker-Ready-2496ED?style=flat-square&logo=docker&logoColor=white" alt="Docker Ready"></a>
+</p>
 
 ---
 
